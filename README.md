@@ -5,3 +5,8 @@ A Chrome extension that allows you to download videos from X (Twitter) and uploa
 ## License
 
 MIT License - feel free to modify and distribute.
+
+
+## Current Status
+
+Work in Progress
