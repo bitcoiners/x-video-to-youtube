@@ -7,11 +7,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   if (request.action === 'detectVideo') {
     try {
-      const videoInfo = detectXVideo();
-      console.log("X video detection result:", videoInfo);
+      const videoInfo = detectMainPostVideo();
+      console.log("Main post video detection result:", videoInfo);
       sendResponse(videoInfo);
     } catch (error) {
-      console.error("Error in X video detection:", error);
+      console.error("Error in video detection:", error);
       sendResponse({ 
         success: false, 
         error: error.message 
@@ -19,223 +19,248 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
   }
   
-  return true; // Keep message channel open for async response
+  return true;
 });
 
-// Improved X video detection function
-function detectXVideo() {
-  console.log("Starting X video detection...");
+// Main function to detect ONLY the main post video
+function detectMainPostVideo() {
+  console.log("🔍 Starting main post video detection...");
   
-  // Method 1: Look for video elements directly
-  const videos = document.querySelectorAll('video');
-  console.log(`Found ${videos.length} video elements on X page`);
+  if (!isTweetPage()) {
+    return { 
+      success: false, 
+      error: 'Please navigate to a specific tweet page (URL should contain /status/).' 
+    };
+  }
+
+  const mainVideo = findMainVideoWithMultipleStrategies();
   
-  for (let i = 0; i < videos.length; i++) {
-    const video = videos[i];
-    console.log(`X Video ${i}:`, {
-      src: video.src,
-      currentSrc: video.currentSrc,
-      videoWidth: video.videoWidth,
-      videoHeight: video.videoHeight,
-      duration: video.duration
-    });
+  if (mainVideo && mainVideo.videoElement) {
+    const videoUrl = extractDirectVideoUrl(mainVideo.videoElement);
     
-    // Check if this is a main X post video (not background/small)
-    if (isMainXVideo(video)) {
-      const videoUrl = extractXVideoUrl(video);
-      if (videoUrl) {
+    if (videoUrl) {
+      return {
+        success: true,
+        videoUrl: videoUrl,
+        videoInfo: {
+          duration: formatDuration(mainVideo.videoElement.duration),
+          quality: `${mainVideo.videoElement.videoWidth}x${mainVideo.videoElement.videoHeight}`,
+          type: 'MP4',
+          source: mainVideo.source,
+          isDirect: true,
+          requiresManual: false,
+          confidence: mainVideo.confidence,
+          isBlobUrl: false
+        }
+      };
+    } else {
+      // Return blob URL with manual flag
+      const blobUrl = mainVideo.videoElement.src || mainVideo.videoElement.currentSrc;
+      return {
+        success: true,
+        videoUrl: blobUrl,
+        videoInfo: {
+          duration: formatDuration(mainVideo.videoElement.duration),
+          quality: `${mainVideo.videoElement.videoWidth}x${mainVideo.videoElement.videoHeight}`,
+          type: 'Video',
+          source: mainVideo.source + '_blob',
+          isDirect: false,
+          requiresManual: true,
+          confidence: mainVideo.confidence,
+          isBlobUrl: true
+        }
+      };
+    }
+  }
+
+  return { 
+    success: false, 
+    error: 'No video found on this tweet page.' 
+  };
+}
+
+// Check if we're on a tweet page
+function isTweetPage() {
+  const url = window.location.href;
+  return url.includes('/status/') || url.includes('/i/status/');
+}
+
+// Use multiple strategies to find the main video
+function findMainVideoWithMultipleStrategies() {
+  const strategies = [
+    { name: 'timeline_article', method: findVideoInTimelineArticle },
+    { name: 'tweet_testid', method: findVideoInTweetTestId },
+    { name: 'primary_column', method: findVideoInPrimaryColumn },
+    { name: 'largest_video', method: findLargestVideo }
+  ];
+
+  for (const strategy of strategies) {
+    try {
+      const result = strategy.method();
+      if (result && result.videoElement) {
+        console.log(`✅ Strategy ${strategy.name} found video`);
+        return result;
+      }
+    } catch (error) {
+      console.log(`Strategy ${strategy.name} failed:`, error);
+    }
+  }
+
+  return null;
+}
+
+// Strategy 1: Look for timeline article
+function findVideoInTimelineArticle() {
+  const articles = document.querySelectorAll('article');
+  
+  for (const article of articles) {
+    const rect = article.getBoundingClientRect();
+    if (rect.top < 500 && rect.width > 500) {
+      const video = article.querySelector('video');
+      if (video && isVideoValid(video)) {
         return {
-          success: true,
-          videoUrl: videoUrl,
-          videoInfo: {
-            duration: formatDuration(video.duration),
-            quality: `${video.videoWidth}x${video.videoHeight}`,
-            type: 'MP4',
-            source: 'direct',
-            platform: 'X (Twitter)'
-          }
+          videoElement: video,
+          source: 'timeline_article',
+          confidence: 'high'
         };
       }
     }
   }
+  return null;
+}
+
+// Strategy 2: Look for tweet with data-testid
+function findVideoInTweetTestId() {
+  const tweetContainers = document.querySelectorAll('[data-testid="tweet"]');
   
-  // Method 2: Look for X's specific video containers
-  const containerVideo = findVideoInXContainers();
-  if (containerVideo) {
-    return containerVideo;
-  }
-  
-  // Method 3: Try to find video in article containers (main X posts)
-  const articleVideo = findVideoInXArticles();
-  if (articleVideo) {
-    return articleVideo;
-  }
-  
-  return { 
-    success: false, 
-    error: 'No suitable X video found. Make sure you are on an X post with a video and the video is fully loaded.',
-    debug: {
-      videoCount: videos.length,
-      videoDetails: Array.from(videos).map(v => ({
-        src: v.src,
-        dimensions: `${v.videoWidth}x${v.videoHeight}`,
-        duration: v.duration
-      }))
+  for (const container of tweetContainers) {
+    const rect = container.getBoundingClientRect();
+    if (rect.top < 600) {
+      const video = container.querySelector('video');
+      if (video && isVideoValid(video)) {
+        return {
+          videoElement: video,
+          source: 'tweet_testid',
+          confidence: 'high'
+        };
+      }
     }
-  };
+  }
+  return null;
 }
 
-// Check if video is likely the main X post video
-function isMainXVideo(video) {
-  // Look for videos that are actually visible and have reasonable size
-  const rect = video.getBoundingClientRect();
-  const isVisible = rect.width > 200 && rect.height > 100;
-  const hasContent = video.videoWidth > 0 && video.videoHeight > 0;
-  
-  // Check if video is within an X post container
-  const inXPost = video.closest('[data-testid="tweet"]') || 
-                  video.closest('article') ||
-                  video.closest('[data-testid="cellInnerDiv"]') ||
-                  video.closest('[data-testid="primaryColumn"]');
-  
-  return isVisible && hasContent && inXPost;
+// Strategy 3: Look in primary column
+function findVideoInPrimaryColumn() {
+  const primaryColumn = document.querySelector('[data-testid="primaryColumn"]');
+  if (primaryColumn) {
+    const videos = primaryColumn.querySelectorAll('video');
+    
+    for (const video of videos) {
+      if (isVideoValid(video)) {
+        const rect = video.getBoundingClientRect();
+        if (rect.top < 800) {
+          return {
+            videoElement: video,
+            source: 'primary_column',
+            confidence: 'medium'
+          };
+        }
+      }
+    }
+  }
+  return null;
 }
 
-// Extract X video URL from video element
-function extractXVideoUrl(video) {
-  // Try different sources in priority order
-  if (video.src && video.src.startsWith('blob:')) {
-    // For blob URLs, try to find the actual MP4 source
-    return findXVideoMp4Source(video);
-  } else if (video.src && (video.src.includes('.mp4') || video.src.includes('video.twimg.com'))) {
-    return video.src;
-  } else if (video.currentSrc && video.currentSrc !== video.src) {
-    return video.currentSrc;
+// Strategy 4: Find largest visible video
+function findLargestVideo() {
+  const videos = Array.from(document.querySelectorAll('video'));
+  
+  let bestVideo = null;
+  let bestSize = 0;
+  
+  for (const video of videos) {
+    if (isVideoValid(video)) {
+      const rect = video.getBoundingClientRect();
+      const size = rect.width * rect.height;
+      
+      if (size > 10000 && isElementInViewport(video)) {
+        if (size > bestSize) {
+          bestSize = size;
+          bestVideo = video;
+        }
+      }
+    }
+  }
+  
+  if (bestVideo) {
+    return {
+      videoElement: bestVideo,
+      source: 'largest_visible',
+      confidence: 'low'
+    };
   }
   
   return null;
 }
 
-// Find MP4 source for blob URLs on X
-function findXVideoMp4Source(videoElement) {
-  // Look for source elements or track network requests in parent
-  const sources = videoElement.querySelectorAll('source');
+// Check if video element is valid
+function isVideoValid(video) {
+  return video && 
+         typeof video.videoWidth === 'number' && 
+         typeof video.videoHeight === 'number' &&
+         video.videoWidth > 0 && 
+         video.videoHeight > 0;
+}
+
+// Check if element is in viewport
+function isElementInViewport(el) {
+  const rect = el.getBoundingClientRect();
+  return (
+    rect.top >= 0 &&
+    rect.left >= 0 &&
+    rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+    rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+  );
+}
+
+// Extract direct video URL
+function extractDirectVideoUrl(video) {
+  if (video.src && isDirectVideoUrl(video.src)) {
+    return video.src;
+  }
+  
+  if (video.currentSrc && video.currentSrc !== video.src && isDirectVideoUrl(video.currentSrc)) {
+    return video.currentSrc;
+  }
+  
+  const sources = video.querySelectorAll('source');
   for (const source of sources) {
-    if (source.src && source.src.includes('.mp4')) {
+    if (source.src && isDirectVideoUrl(source.src)) {
       return source.src;
     }
   }
   
-  // Look in parent elements for data attributes
-  const parent = videoElement.closest('div');
-  if (parent) {
-    const dataUrl = parent.getAttribute('data-video-url') || 
-                    parent.getAttribute('data-src') ||
-                    parent.getAttribute('data-video-src');
-    if (dataUrl && dataUrl.includes('.mp4')) {
-      return dataUrl;
-    }
-  }
-  
   return null;
 }
 
-// Look for videos in X-specific containers
-function findVideoInXContainers() {
-  const selectors = [
-    '[data-testid="videoComponent"] video',
-    '[data-testid="videoPlayer"] video',
-    'article video',
-    '[role="article"] video',
-    '.css-1dbjc4n video', // X's common class
-    '[data-testid="tweetVideo"] video'
-  ];
+// Check if URL is a direct video URL
+function isDirectVideoUrl(url) {
+  if (!url || typeof url !== 'string') return false;
   
-  for (const selector of selectors) {
-    const video = document.querySelector(selector);
-    if (video && video.src) {
-      const videoUrl = extractXVideoUrl(video);
-      if (videoUrl) {
-        return {
-          success: true,
-          videoUrl: videoUrl,
-          videoInfo: {
-            duration: formatDuration(video.duration),
-            quality: `${video.videoWidth}x${video.videoHeight}`,
-            type: 'MP4',
-            source: 'x-container',
-            platform: 'X (Twitter)'
-          }
-        };
-      }
-    }
-  }
-  
-  return null;
+  return (
+    (url.includes('.mp4') || 
+     url.includes('video.twimg.com') ||
+     url.includes('.m3u8')) &&
+    (url.startsWith('http') && !url.startsWith('blob:'))
+  );
 }
 
-// Look for videos in X article elements (main posts)
-function findVideoInXArticles() {
-  const articles = document.querySelectorAll('article, [role="article"]');
-  console.log(`Found ${articles.length} X articles on page`);
-  
-  for (const article of articles) {
-    const video = article.querySelector('video');
-    if (video && isMainXVideo(video)) {
-      const videoUrl = extractXVideoUrl(video);
-      if (videoUrl) {
-        return {
-          success: true,
-          videoUrl: videoUrl,
-          videoInfo: {
-            duration: formatDuration(video.duration),
-            quality: `${video.videoWidth}x${video.videoHeight}`,
-            type: 'MP4',
-            source: 'x-article',
-            platform: 'X (Twitter)'
-          }
-        };
-      }
-    }
-  }
-  return null;
-}
-
-// Format video duration
+// Format duration
 function formatDuration(seconds) {
-  if (!seconds || isNaN(seconds) || !isFinite(seconds)) return 'Unknown';
+  if (!seconds || isNaN(seconds)) return 'Unknown';
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// Monitor for new X videos loaded dynamically
-const observer = new MutationObserver((mutations) => {
-  mutations.forEach((mutation) => {
-    mutation.addedNodes.forEach((node) => {
-      if (node.nodeType === 1) { // Element node
-        if (node.querySelector && node.querySelector('video')) {
-          console.log('New X video content detected on page');
-        }
-      }
-    });
-  });
-});
-
-// Start observing when DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    observer.observe(document.body, { 
-      childList: true, 
-      subtree: true 
-    });
-  });
-} else {
-  observer.observe(document.body, { 
-    childList: true, 
-    subtree: true 
-  });
-}
-
-// Log when content script is loaded
-console.log("X Video to YouTube content script initialized successfully");
+console.log("X Video to YouTube content script initialized");
