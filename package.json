@@ -1,0 +1,13 @@
+{
+  "name": "x-video-to-youtube",
+  "version": "1.0.0",
+  "description": "Chrome extension to download videos from X (Twitter) and upload to YouTube",
+  "main": "background.js",
+  "scripts": {
+    "build": "echo 'No build process yet'",
+    "test": "echo 'No tests yet'"
+  },
+  "keywords": ["chrome-extension", "twitter", "x", "youtube", "video-download"],
+  "author": "Your Name",
+  "license": "MIT"
+}
